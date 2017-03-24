@@ -1,0 +1,368 @@
+#!/usr/bin/python
+from __future__ import print_function
+import dicom # please install dicom module - in Ubuntu/Debian sudo apt-get install python-dicom
+import sys # command line parameter parsing
+# nobin_tags are converted to dec to speedup the whole thing
+nobin_tags=[ (40,4181), (41,4112),(32736,16)]
+# time_tags are patient and time specific
+time_tags = [(0x0008,0x0012),(0x0008,0x0013),(0x0008,0x0018),(0x0008,0x0020),(0x0008,0x0021),
+(0x0008,0x0022),(0x0008,0x0023),(0x0008,0x0030),(0x0008,0x0031),(0x0008,0x0032),(0x0008,0x0033),(0x0008,0x0050),
+(0x0008,0x1155),(0x0008,0x1155),(0x0008,0x1155),
+(0x0010,0x0010),(0x0010,0x0020),(0x0010,0x0030),
+(0x0020,0x000e),(0x0020,0x0052),(0x0020,0x000d),
+(0x0029,0x1009),(0x0029,0x1019),(0x0040,0x0243),
+(0x0040,0x0244),(0x0040,0x0245)
+   ]
+
+
+def is_nobin(tag):
+	"""
+	Returns True if tag is listed in nobin_tags (so it is not binary)
+	"""
+	for key,val in nobin_tags:
+		if ( (tag.group==key) and (tag.elem==val)):
+			return True
+	return False
+
+def is_time(tag):
+	"""
+	Returns True if tag is listed in time_tags (so it represents date/time of data)
+	"""
+        for key,val in time_tags:
+                if ( (tag.group==key) and (tag.elem==val)):
+                        return True
+        return False
+
+	
+class dcm_dummy:
+	"""
+	dummy class for storing values in pseudo-pydicom dictionary
+	"""
+	def __init__(self,s):
+		self.value=s
+
+def import_nonDICOM(fn):
+	"""
+	Loads non-DICOM file and converts to pydicom-expected dictionary
+	"""
+	txt=dict()
+	with open (fn, "r") as f:
+		data=f.readlines()
+	dcm=dict()
+	for l in data:
+		s=l.replace('\n', '')
+		if ((s[0]=="(") and (s[10]==")")  ): # it is a regular DICOM tag (aaaa,bbbb).
+			# if you have (somethingelse), it will fail nicely ...
+			skip=False # Error ocured during conversion ?
+			try:
+				group=int(s[1]+s[2]+s[3]+s[4],16)
+			except ValueError:
+				skip=True
+				print("Error converting tag "+s[:11]+": \""+s[1:5]+"\" is not a hex number. Skipping ...")
+			try:
+				elem=int(s[6]+s[7]+s[8]+s[9],16)
+                        except ValueError:
+                                skip=True
+                                print("Error converting tag "+s[:11]+": \""+s[6:10]+"\" is not a hex number. Skipping ...")
+			if (skip==False):
+				val=s.partition('=')[2]
+				dcm[dicom.tag.Tag(group,elem)]=dcm_dummy(val)
+		elif (s[0]!="#"): # comment
+			try:	
+				spl=s.partition('=')
+				key=spl[0]
+				val=spl[2]
+				txt[key]=val
+			except e:
+				print ("Error parsing file ! Input is either not aan ASCII dump or it may be corrupted")
+				print("Line with error:")
+				print(s)
+				sys.exit(2) 
+	return (dcm,txt)
+
+
+def read_txt(data):
+	"""
+	Reads private ASCII part from Siemens tag of data dataset
+	"""
+	txt=dict()
+	d=data[dicom.tag.Tag(41,4128)].value.rsplit("\n### ASCCONV END ###")[0].split("### ASCCONV BEGIN ")[1].split("###\n")[1].split("\n")
+	for l in d:
+		spl=l.split("=")
+		key=spl[0].rstrip()
+		val=spl[1].lstrip()
+		txt[key]=val
+	return txt
+
+def pv(k,v):
+	"""
+	Print value
+	"""
+	if ((xml==True) and  (k.group==41) and (k.elem==4128)):
+		return "N/A"
+	if (valOnly):
+		return str(v.value).rstrip()
+	else:
+		return v
+
+def pk(k):
+	"""
+	print key
+	"""
+	return "({0:04x},{1:04x})".format(k.group,k.element) # original pydicom uses space !
+
+def usage():
+        "Usage options of the program"
+        print ("USAGE:",sys.argv[0]," inputfile1 inputfile2 [parameters]")
+        print ("")        
+        print (" Output options:")
+	print ("  -a, --diff_aval	if different, print value in the 1st file")
+	print ("  -c, --csv_output	like canonical diff, but csv output ")
+        print ("  -h, --help     	give this help list")
+	print ("  -l  --print_label	print label (name) of DICOM tag in output")
+	print ("  -s, --same		only DICOM attributes with the same value in both files")
+	print ("")
+        print (" Comparison options:")
+	print ("  -A, --ASCII		the first file is ASCII output dump. Only these values are compared")
+	print ("  -b  --bin		compare binary values as well")
+	print ("  -r, --raw		print and compare raw data (including variable type and comment)")
+	print ("  -t, --ignore_time	ignore time and patient data while finding differences")
+	print ("			note that age,sex,height and weight are preserved as you may wish")
+	print ("			to include them anyway. If not, please help yourself to remove them.")
+	print ("  -x, --xml		do not ignore Siemens XML tag (0029, 1020)")
+	print ("")
+        print ("Author: Jiri Keller, M.D., Ph.D. <keller.public+git-didiff@gmail.com>") 
+	print ("""This SW is a result of the research funded by the project Nr. LO1611 with
+a financial support from the MEYS under the NPU I program.""")
+
+def print_tag(dicomTag):
+	"""
+	Return true if tag should be printed
+	"""
+	if ((xml==False) and  (dicomTag.group==41) and (dicomTag.elem==4128)):
+		return False # XML in Siemens private tag (0029, 1020) breaks output :-/
+	if (nobin==False):
+		return True
+	if (is_nobin(dicomTag)):
+		return False
+	if ((timeFilter) and is_time(dicomTag)):
+		return False
+	return True
+
+
+def if_wanted_print_label(dicomTag,prefix="",sufix=""):
+	"""
+	If printLabel is True, prints dicom tag name with prefix
+	(e.g. ;ImplementationVersionName )
+	dicomTag should be dicomTag ;-)
+	Dictionary is taken from /usr/lib/pythonX.Y/dist-packages/dicom/_dicom_dict.py
+	"""
+	if (printLabel):
+		try:
+			return prefix+dicom._dicom_dict.DicomDictionary.get(dicomTag.group*65536+dicomTag.elem)[4]+sufix
+		except TypeError:
+			return prefix+"N/A"+sufix
+		except IndexError: # workaround for a bug in old Ubuntu 12.04 ...
+			return prefix+dicom._dicom_dict.DicomDictionary.get(dicomTag.group*65536+dicomTag.elem)[2].replace(" ","")+sufix
+
+	return ""
+
+
+def dcompare(a,b,tag):
+	"""
+	dcompare is dicom_compare function.
+	if valOnly is true, compares only a.value to b.value, otherwise whole objects are simply compared
+	"""
+	if (valOnly==True):
+		try:
+			if (a[tag].value==b[tag].value):
+				return True
+			else:
+				if (firstAscii):
+					if (a[tag].value==b[tag].value.__str__()):
+						return True
+					else:
+						m=1
+						tmp_val=0
+						atv=a[tag].value
+						for j in range(atv.__len__()-1,0,-1):
+							tmp_val+=m*ord(atv[j-1])
+							m=m*256
+						if (tmp_val==b[tag].value):
+							return True
+
+				return False
+		except (KeyError, ValueError) as e: # if tag from A does not exist in B. Hopefully only -v case
+			return False
+	else:
+		try:
+			if (a[tag]==b[tag]):
+				return True
+			else:
+				return False
+		except KeyError:
+			return False
+	return False # to be sure ...
+
+def tcompare(A,B,key):
+	try:
+		if (A[key]==B[key]):
+			return True
+		else:
+			return False
+	except KeyError:
+		return False
+
+def canonical_diff(a,b):
+	"""
+	Output in the format of traditional UNIX diff command.
+	instead of "line c line" tagging, "TagID: key" is used
+	"""
+	for key,val in a.items() :
+		if ((dcompare(a,b,key)==False) and (print_tag(key) )):
+			print ("TagID:",pk(key),if_wanted_print_label(key,""))
+			print ("<",pv(key,a[key])) #yes, should be pv(key,val), but pydicom.items() returns strings :(
+			try:
+				v=pv(key,b[key])
+				print ("---")
+				print (">",pv(key,b[key]))
+			except (KeyError, ValueError): #
+				pass
+	if (processTXT):
+               for key,val in txtA.items():
+                        if (tcompare(txtA,txtB,key)==False):
+                                print ("TagID:",key)
+				print ("<",val)
+                                try:
+					v=txtB[key]
+					print ("---")
+					print( ">",v)
+                                except (KeyError, ValueError):
+					pass
+
+
+def canonical_diff_csv(a,b):
+        """
+        Output in csv (key,element,a_val,b_val)
+        """
+        for key,val in a.items() :
+		s=""
+                if ((dcompare(a,b,key)==False) and (print_tag(key) )):
+			s="{0:04x},{1:04x},".format(key.group,key.element)
+                        s+=pv(key,a[key]).replace(",","_")+","
+                        try:
+                                print (s,pv(key,b[key]).replace(",","_"),if_wanted_print_label(key,","),sep="")
+                        except (KeyError, ValueError): #
+				print (s)
+        if (processTXT):
+                for key,val in txtA.items():
+                        if (tcompare(txtA,txtB,key)==False):
+                                s="xxxx,"+key+"="+val+","
+				try:
+					print(s,txtB[key],sep="")
+				except KeyError:
+					print (s)
+
+
+
+def same_diff(a,b):
+	"""
+	Outputs only tags (and values) which are same in both inputs
+	"""
+        for key,val in a.items() :
+       	        if ((dcompare(a,b,key)) and (print_tag(key))):
+               	        print ( pk(key)+if_wanted_print_label(key," "," ")+"="+pv(key,a[key]))
+	if (processTXT):
+		for key,val in txtA.items():
+			if (tcompare(txtA,txtB,key)):
+				print (key+"="+val)
+
+def diff_Aval(a,b):
+	"""
+	Output only tags with different values, printed values are from the first input only
+	"""
+        for key,val in a.items() :
+       	        if ((dcompare(a,b,key)==False) and (print_tag(key))):
+               	        print ( pk(key)+if_wanted_print_label(key," "," ")+"="+pv(key,a[key]))
+        if (processTXT):
+                for key,val in txtA.items():
+                        if (tcompare(txtA,txtB,key)==False):
+                                print (key+"="+val)
+
+
+# CLI params parsing
+req_params=2 # at least two input files !
+if sys.argv.__len__()<(req_params+1):
+        usage()
+        sys.exit(1)
+# processing arguments
+mode=0 # default, canonical diff behaviour
+nobin=True # default, do not print binary stuff
+valOnly=True # default, print only value, not everything you find
+xml=False # default, ignore siemens XML (0029, 1020) tag
+firstAscii=False # by default, two DICOM files are compared
+timeFilter=False
+printLabel=False
+modes_selected=0
+for i in range(3,sys.argv.__len__()):
+        if sys.argv[i] in ("-h", "--help"):      
+                usage()                     
+                sys.exit()                  
+        elif sys.argv[i] in ("--same","-s"):
+		mode=1
+		modes_selected+=1
+	elif sys.argv[i] in ("--diff_aval","-a"):
+		mode=2
+		modes_selected+=1
+	elif sys.argv[i] in ("-r","--raw"):
+		valOnly=False
+	elif sys.argv[i] in ("-b","--bin"):
+		nobin=False
+	elif sys.argv[i] in ("-x","--xml"):
+		xml=True
+	elif sys.argv[i] in ("-A","--ASCII"):
+		firstAscii=True
+	elif sys.argv[i] in ("-c","--csv_output"):
+		mode=3
+		modes_selected+=1
+	elif sys.argv[i] in ("-t","--ignore_time"):
+		timeFilter=True
+	elif sys.argv[i] in ("-l","--print_label"):
+		printLabel=True
+        else:
+                print("Invalid argument",sys.argv[i])
+                usage()                          
+                sys.exit(2) 
+
+if (modes_selected>1):
+	print("ERROR: Cannot combine multiple output modes ! Your combination of")
+	print("       parameters cannot be used ! Try didiff -h for help. Sorry.")
+	sys.exit(3)
+
+if ((mode!=0) & (valOnly==False)):
+	print ("ERROR: --raw switch is supported in canonical didiff only")
+	print ("       if you have any use of it with other switches, please let us know")
+	sys.exit(10)
+
+if (firstAscii):
+	(a,txtA)=import_nonDICOM(sys.argv[1])
+else:
+	a=dicom.read_file(sys.argv[1])
+b=dicom.read_file(sys.argv[2])
+processTXT=False
+if (xml and valOnly):
+	if (firstAscii==False): #if true, it was already loaded
+		txtA=read_txt(a)
+	txtB=read_txt(b)
+	processTXT=True # Flag for printing ...
+if (mode==1):
+	same_diff(a,b)
+elif (mode==2):
+	diff_Aval(a,b)
+elif (mode==3):
+	if (valOnly==False):
+		print ("ERROR: csv cannot be used with --raw option. Sorry.")
+		sys.exit(4)
+	canonical_diff_csv(a,b)
+else:
+	canonical_diff(a,b)
