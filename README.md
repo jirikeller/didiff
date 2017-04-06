@@ -5,7 +5,7 @@ Author: Jiří Keller, M.D., Ph.D.
 
 This SW is a result of the research funded by the project Nr. LO1611 with a financial support from the MEYS under the NPU I program.
 
-For more detailed manual, please refer to readme.txt file.
+For more detailed manual, please refer to [readme.txt](readme.txt) file.
 
 # Brief introdution ...
 ## ... to DICOM
@@ -31,7 +31,7 @@ which is (7fe0,0010).
 ## ... to didiff
 Dicomdiff (or didiff) is tool inspired by GNU diff, which compares two files
 line by line. Our tool compares DICOM tags between two DICOM files or a DICOM
-file and ASCII dump (see readme.txt for details).
+file and ASCII dump (see [readme.txt](readme.txt) for details).
 
 There are three basic output modes:
 1. basic diff-like output (values from each files on separate lines)
